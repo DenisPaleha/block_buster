@@ -1,40 +1,36 @@
 import 'package:flutter/services.dart';
 
 class NativeBlockerBridge {
-  static const MethodChannel _channel = MethodChannel('com.block_buster/native_bridge');
+  static const MethodChannel _channel = MethodChannel('com.blockbuster/blocker');
 
-  /// Передает список пакетов для блокировки в SharedPreferences нативного слоя
-  static Future<bool> setBlockedPackages(List<String> packages) async {
+  /// Сохранить список блокируемых пакетов в нативный слой
+  static Future<void> setBlockedPackages(List<String> packages) async {
     try {
-      final bool? success = await _channel.invokeMethod('setBlockedPackages', {
+      await _channel.invokeMethod('setBlockedPackages', {
         'packages': packages,
       });
-      return success ?? false;
     } on PlatformException catch (e) {
-      print("Ошибка при передаче заблокированных пакетов: ${e.message}");
-      return false;
+      print("Ошибка при передаче списка пакетов: ${e.message}");
     }
   }
 
-  /// Начисляет разрешенное время (в секундах) на конкретный пакет
-  static Future<int> addAllowedTime(String packageName, int seconds) async {
+  /// Добавить секунды для конкретного пакета приложения
+  static Future<void> addTime(String packageName, int seconds) async {
     try {
-      final int? newTime = await _channel.invokeMethod('addAllowedTime', {
-        'package': packageName,
+      await _channel.invokeMethod('addTime', {
+        'packageName': packageName,
         'seconds': seconds,
       });
-      return newTime ?? 0;
     } on PlatformException catch (e) {
-      print("Ошибка при начислении времени: ${e.message}");
-      return 0;
+      print("Ошибка при добавлении времени: ${e.message}");
     }
   }
 
-  /// Получает оставшееся разрешенное время (в секундах)
+  /// Получить оставшееся время в секундах
   static Future<int> getTimeLeft(String packageName) async {
     try {
       final int? timeLeft = await _channel.invokeMethod('getTimeLeft', {
-        'package': packageName,
+        'packageName': packageName,
       });
       return timeLeft ?? 0;
     } on PlatformException catch (e) {
@@ -43,18 +39,18 @@ class NativeBlockerBridge {
     }
   }
 
-  /// Проверяет, включена ли служба Accessibility в настройках телефона
+  /// Проверить, включена ли служба Accessibility
   static Future<bool> isAccessibilityServiceEnabled() async {
     try {
-      final bool? isEnabled = await _channel.invokeMethod('isAccessibilityServiceEnabled');
-      return isEnabled ?? false;
+      final bool? enabled = await _channel.invokeMethod('isAccessibilityEnabled');
+      return enabled ?? false;
     } on PlatformException catch (e) {
-      print("Ошибка проверки Accessibility: ${e.message}");
+      print("Ошибка проверки службы: ${e.message}");
       return false;
     }
   }
 
-  /// Открывает системное меню специальных возможностей
+  /// Открыть системные настройки Accessibility для выдачи разрешения
   static Future<void> openAccessibilitySettings() async {
     try {
       await _channel.invokeMethod('openAccessibilitySettings');

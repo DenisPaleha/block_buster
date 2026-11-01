@@ -8,7 +8,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.block_buster/native_bridge"
+    private val CHANNEL = "com.blockbuster/blocker"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -17,63 +17,43 @@ class MainActivity: FlutterActivity() {
             val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
 
             when (call.method) {
-                // Обновить список заблокированных пакетов: ["com.instagram.android", ...]
                 "setBlockedPackages" -> {
-                    val list = call.argument<List<String>>("packages")?.toSet() ?: emptySet()
-                    prefs.edit().putStringSet("blocked_packages", list).apply()
+                    val packages = call.argument<List<String>>("packages") ?: emptyList()
+                    prefs.edit().putStringSet("blocked_packages", packages.toSet()).apply()
                     result.success(true)
                 }
-
-                // Добавить накрученные секунды при конвертации оборотов
-                "addAllowedTime" -> {
-                    val pkg = call.argument<String>("package")
-                    val secondsToAdd = call.argument<Int>("seconds") ?: 0
-                    if (pkg != null) {
-                        val current = prefs.getInt("time_left_$pkg", 0)
-                        val updated = current + secondsToAdd
-                        prefs.edit().putInt("time_left_$pkg", updated).apply()
-                        result.success(updated)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "Package name is null", null)
-                    }
+                "addTime" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val seconds = call.argument<Int>("seconds") ?: 0
+                    val current = prefs.getInt("time_left_$packageName", 0)
+                    prefs.edit().putInt("time_left_$packageName", current + seconds).apply()
+                    result.success(true)
                 }
-
-                // Получить оставшиеся секунды для конкретного пакета
                 "getTimeLeft" -> {
-                    val pkg = call.argument<String>("package")
-                    if (pkg != null) {
-                        val current = prefs.getInt("time_left_$pkg", 0)
-                        result.success(current)
-                    } else {
-                        result.success(0)
-                    }
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val timeLeft = prefs.getInt("time_left_$packageName", 0)
+                    result.success(timeLeft)
                 }
-
-                // Проверить, включена ли служба Accessibility в настройках телефона
-                "isAccessibilityServiceEnabled" -> {
-                    val enabled = isAccessibilityEnabled(context)
+                "isAccessibilityEnabled" -> {
+                    val enabled = isAccessibilityServiceEnabled(context, BlockerAccessibilityService::class.java)
                     result.success(enabled)
                 }
-
-                // Открыть экран настроек «Специальные возможности», чтобы пользователь включил службу
                 "openAccessibilitySettings" -> {
                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                     startActivity(intent)
                     result.success(true)
                 }
-
                 else -> result.notImplemented()
             }
         }
     }
 
-    private fun isAccessibilityEnabled(context: Context): Boolean {
-        val expectedServiceName = "${context.packageName}/${context.packageName}.BlockerAccessibilityService"
+    private fun isAccessibilityServiceEnabled(context: Context, service: Class<*>): Boolean {
+        val expectedComponentName = "${context.packageName}/${service.name}"
         val enabledServices = Settings.Secure.getString(
             context.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-
-        return enabledServices.contains(expectedServiceName)
+        return enabledServices.contains(expectedComponentName)
     }
 }

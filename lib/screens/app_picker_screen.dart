@@ -28,6 +28,11 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
     final savedList = prefs.getStringList('saved_blocked_packages') ?? [];
     _selectedPackages = savedList.toSet();
 
+    // Синхронизируем с нативным Kotlin-сервисом сразу при входе
+    if (_selectedPackages.isNotEmpty) {
+      await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
+    }
+
     // 2. Получаем список приложений (исключая системные, только с лаунчером)
     final apps = await InstalledApps.getInstalledApps(
       excludeSystemApps: true,
