@@ -22,27 +22,40 @@ class MainActivity: FlutterActivity() {
                     prefs.edit().putStringSet("blocked_packages", packages.toSet()).apply()
                     result.success(true)
                 }
+
                 "addTime" -> {
                     val packageName = call.argument<String>("packageName") ?: ""
                     val seconds = call.argument<Int>("seconds") ?: 0
-                    val current = prefs.getInt("time_left_$packageName", 0)
-                    prefs.edit().putInt("time_left_$packageName", current + seconds).apply()
+                    val now = System.currentTimeMillis()
+                    val currentDeadline = prefs.getLong("deadline_$packageName", 0L)
+
+                    // Если время еще не вышло — продлеваем дедлайн, иначе считаем от текущего момента
+                    val baseTime = if (currentDeadline > now) currentDeadline else now
+                    val newDeadline = baseTime + (seconds * 1000L)
+
+                    prefs.edit().putLong("deadline_$packageName", newDeadline).apply()
                     result.success(true)
                 }
+
                 "getTimeLeft" -> {
                     val packageName = call.argument<String>("packageName") ?: ""
-                    val timeLeft = prefs.getInt("time_left_$packageName", 0)
-                    result.success(timeLeft)
+                    val now = System.currentTimeMillis()
+                    val deadline = prefs.getLong("deadline_$packageName", 0L)
+                    val remainingSeconds = if (deadline > now) ((deadline - now) / 1000).toInt() else 0
+                    result.success(remainingSeconds)
                 }
+
                 "isAccessibilityEnabled" -> {
                     val enabled = isAccessibilityServiceEnabled(context, BlockerAccessibilityService::class.java)
                     result.success(enabled)
                 }
+
                 "openAccessibilitySettings" -> {
                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                     startActivity(intent)
                     result.success(true)
                 }
+
                 else -> result.notImplemented()
             }
         }

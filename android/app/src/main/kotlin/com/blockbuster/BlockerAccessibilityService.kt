@@ -4,97 +4,85 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
 class BlockerAccessibilityService : AccessibilityService() {
 
+    private val tag = "BlockerService"
     private val handler = Handler(Looper.getMainLooper())
-    private var currentActivePackage: String? = null
-    private var lastTickTimestamp: Long = 0L
-    private var isTickerRunning = false
+    private var scheduledPackage: String? = null
 
-    private val timeTicker = object : Runnable {
-        override fun run() {
-            val pkg = currentActivePackage
-            if (pkg == null) {
-                isTickerRunning = false
-                return
-            }
-
-            val now = SystemClock.elapsedRealtime()
-            val elapsedSeconds = ((now - lastTickTimestamp) / 1000).toInt()
-
-            if (elapsedSeconds >= 1) {
-                lastTickTimestamp = now
-                val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
-                val currentSeconds = prefs.getInt("time_left_$pkg", 0)
-                val newSeconds = (currentSeconds - elapsedSeconds).coerceAtLeast(0)
-
-                prefs.edit().putInt("time_left_$pkg", newSeconds).apply()
-
-                if (newSeconds <= 0) {
-                    // Время вышло — блокируем и отправляем на рабочий стол
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    stopTracking()
-                    return
-                }
-            }
-
-            // Перезапускаем тикер строго в одном экземпляре
-            handler.postDelayed(this, 1000)
+    private val autoLockTask = Runnable {
+        try {
+            Log.d(tag, "Deadline reached -> performing GLOBAL_ACTION_HOME")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        } catch (e: Exception) {
+            Log.e(tag, "Error performing home action: ${e.message}")
+        } finally {
+            scheduledPackage = null
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val openedPackage = event.packageName?.toString() ?: return
+        try {
+            if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
-        // Пропускаем собственное приложение, системный UI и клавиатуры
-        if (openedPackage == packageName ||
-            openedPackage == "com.android.systemui" ||
-            openedPackage.contains("inputmethod")) {
-            return
-        }
+            val pkgSequence = event.packageName ?: return
+            val openedPackage = pkgSequence.toString()
 
-        val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
-        val blockedPackages = prefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
-
-        if (blockedPackages.contains(openedPackage)) {
-            val timeLeft = prefs.getInt("time_left_$openedPackage", 0)
-
-            if (timeLeft <= 0) {
-                // Времени нет — мгновенный сброс
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                stopTracking()
-            } else {
-                // Если приложение уже трекается — не плодим параллельные таймеры
-                if (currentActivePackage != openedPackage) {
-                    stopTracking()
-                    currentActivePackage = openedPackage
-                    lastTickTimestamp = SystemClock.elapsedRealtime()
-                    isTickerRunning = true
-                    handler.post(timeTicker)
-                }
+            // Игнорируем пустые имена, себя, системный UI и клавиатуры
+            if (openedPackage.isBlank() ||
+                openedPackage == packageName ||
+                openedPackage == "com.android.systemui" ||
+                openedPackage.contains("inputmethod")) {
+                return
             }
-        } else {
-            // Пользователь свернул заблокированное приложение или перешел в другое разрешенное
-            stopTracking()
+
+            val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
+            val blockedPackages = prefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
+
+            if (blockedPackages.contains(openedPackage)) {
+                val now = System.currentTimeMillis()
+                val deadline = prefs.getLong("deadline_$openedPackage", 0L)
+                val remainingMillis = deadline - now
+
+                if (remainingMillis <= 0L) {
+                    cancelScheduledLock()
+                    Log.d(tag, "App $openedPackage is locked. Minimizing.")
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    // Всегда гарантированно перевзводим таймер на точный остаток времени
+                    cancelScheduledLock()
+                    scheduledPackage = openedPackage
+                    Log.d(tag, "Scheduling lock for $openedPackage in ${remainingMillis / 1000}s")
+                    handler.postDelayed(autoLockTask, remainingMillis)
+                }
+            } else {
+                // Пользователь вышел из заблокированного приложения — снимаем таймер
+                cancelScheduledLock()
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Unhandled error in onAccessibilityEvent: ${e.message}", e)
         }
     }
 
-    private fun stopTracking() {
-        handler.removeCallbacks(timeTicker)
-        currentActivePackage = null
-        isTickerRunning = false
+    private fun cancelScheduledLock() {
+        try {
+            handler.removeCallbacks(autoLockTask)
+        } catch (e: Exception) {
+            Log.e(tag, "Error cancelling lock: ${e.message}")
+        } finally {
+            scheduledPackage = null
+        }
     }
 
     override fun onInterrupt() {
-        stopTracking()
+        cancelScheduledLock()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopTracking()
+        cancelScheduledLock()
     }
 }
