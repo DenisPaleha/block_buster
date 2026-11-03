@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:installed_apps/app_info.dart';
 import 'package:installed_apps/installed_apps.dart';
@@ -18,7 +19,7 @@ class ConvertWalletScreen extends StatefulWidget {
   State<ConvertWalletScreen> createState() => _ConvertWalletScreenState();
 }
 
-class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
+class _ConvertWalletScreenState extends State<ConvertWalletScreen> with WidgetsBindingObserver {
   List<AppInfo> _blockedAppsInfo = [];
   Map<String, int> _remainingSecondsMap = {};
   bool _isLoading = true;
@@ -28,14 +29,27 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
   void initState() {
     super.initState();
     _currentSpins = widget.availableSpins;
+    WidgetsBinding.instance.addObserver(this);
     _loadBlockedApps();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Обновляем остаток банка, когда пользователь возвращается в окно приложения
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadBlockedApps();
+    }
   }
 
   Future<void> _loadBlockedApps() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // Проверяем оба варианта ключа для совместимости
       List<String> blockedPackages = prefs.getStringList('saved_blocked_packages') ??
           prefs.getStringList('blocked_packages') ??
           [];
@@ -45,7 +59,6 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
         return;
       }
 
-      // Загружаем список установленных приложений
       final allApps = await InstalledApps.getInstalledApps(
         excludeSystemApps: true,
         withIcon: true,
@@ -72,11 +85,9 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
         });
       }
     } catch (e) {
-      debugPrint("Ошибка при загрузке заблокированных приложений: $e");
+      debugPrint("Ошибка обновления данных: $e");
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -94,12 +105,12 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
       updatedTime = (_remainingSecondsMap[packageName] ?? 0) + secondsToAdd;
     }
 
-    setState(() {
-      _currentSpins -= costSpins;
-      _remainingSecondsMap[packageName] = updatedTime;
-    });
-
     if (mounted) {
+      setState(() {
+        _currentSpins -= costSpins;
+        _remainingSecondsMap[packageName] = updatedTime;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Добавлено ${secondsToAdd ~/ 60} мин! Списано $costSpins об.'),
@@ -171,7 +182,6 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> {
                     children: [
                       Row(
                         children: [
-                          // Защита от битых байтов иконки
                           (app.icon != null && app.icon!.isNotEmpty)
                               ? Image.memory(
                             app.icon!,

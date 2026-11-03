@@ -19,7 +19,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             val pkgSequence = event.packageName ?: return
             val openedPackage = pkgSequence.toString()
 
-            // Игнорируем пустоту, себя, системный UI, клавиатуры и системные лаунчеры
+            // Игнорируем системные оверлеи, лаунчеры, клавиатуры и сам Block Buster
             if (openedPackage.isBlank() ||
                 openedPackage == packageName ||
                 openedPackage == "com.android.systemui" ||
@@ -33,29 +33,26 @@ class BlockerAccessibilityService : AccessibilityService() {
             val blockedPackages = prefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
 
             if (blockedPackages.contains(openedPackage)) {
-                val now = System.currentTimeMillis()
-                val deadline = prefs.getLong("deadline_$openedPackage", 0L)
-                val remainingMillis = deadline - now
+                val currentBankSeconds = prefs.getInt("bank_seconds_$openedPackage", 0)
 
-                Log.d(tag, "Target app opened: $openedPackage, remaining: ${remainingMillis / 1000}s")
+                Log.d(tag, "Target app opened: $openedPackage, bank: ${currentBankSeconds}s")
 
-                if (remainingMillis <= 0L) {
+                if (currentBankSeconds <= 0) {
                     stopTimer()
-                    Log.d(tag, "Deadline is in the past. HOME!")
+                    Log.d(tag, "Bank is 0s. Immediate HOME!")
                     performGlobalAction(GLOBAL_ACTION_HOME)
                 } else {
-                    // Если таймер уже тикает именно для этого пакета — не трогаем
+                    // Если таймер уже запущен для этого приложения — продолжаем отсчет
                     if (currentActivePackage == openedPackage && countDownTimer != null) {
                         return
                     }
 
-                    // Иначе (первый вход или восстановление после оверлея) — запускаем таймер
-                    startLockTimer(openedPackage, remainingMillis)
+                    startBankTicker(openedPackage, currentBankSeconds)
                 }
             } else {
-                // Пользователь перешел в другое РЕАЛЬНОЕ приложение (не лаунчер и не система)
+                // Пользователь переключился в другое стороннее приложение или рабочий экран
                 if (currentActivePackage != null) {
-                    Log.d(tag, "Switched to real unblocked app $openedPackage. Stopping timer.")
+                    Log.d(tag, "Switched away from $currentActivePackage to $openedPackage. Pausing bank.")
                     stopTimer()
                 }
             }
@@ -64,28 +61,34 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startLockTimer(pkg: String, durationMs: Long) {
+    private fun startBankTicker(pkg: String, startSeconds: Int) {
         stopTimer()
         currentActivePackage = pkg
 
-        Log.d(tag, "Starting CountDownTimer for $pkg on ${durationMs / 1000}s")
+        Log.d(tag, "Starting Bank Ticker for $pkg with $startSeconds seconds")
 
-        // CountDownTimer принудительно держит Looper активным каждую секунду
-        countDownTimer = object : CountDownTimer(durationMs, 1000L) {
+        // Запускаем таймер на количество оставшихся секунд с шагом 1 сек
+        countDownTimer = object : CountDownTimer(startSeconds * 1000L, 1000L) {
             override fun onTick(millisUntilFinished: Long) {
-                // Каждую секунду проверяем актуальный дедлайн
                 val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
-                val deadline = prefs.getLong("deadline_$pkg", 0L)
-                val left = deadline - System.currentTimeMillis()
+                val bank = prefs.getInt("bank_seconds_$pkg", 0)
 
-                if (left <= 0L) {
+                if (bank <= 1) {
+                    // Время закончилось прямо на тике
+                    prefs.edit().putInt("bank_seconds_$pkg", 0).apply()
                     onFinish()
                     cancel()
+                } else {
+                    // Декрементируем банк на 1 секунду
+                    prefs.edit().putInt("bank_seconds_$pkg", bank - 1).apply()
                 }
             }
 
             override fun onFinish() {
-                Log.d(tag, "CountDownTimer finished -> kicking to HOME")
+                Log.d(tag, "Bank depleted for $pkg -> kicking to HOME")
+                val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putInt("bank_seconds_$pkg", 0).apply()
+
                 try {
                     performGlobalAction(GLOBAL_ACTION_HOME)
                 } catch (e: Exception) {

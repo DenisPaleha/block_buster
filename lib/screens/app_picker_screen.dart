@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:installed_apps/app_info.dart';
 import 'package:installed_apps/installed_apps.dart';
@@ -15,6 +16,7 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
   List<AppInfo> _installedApps = [];
   Set<String> _selectedPackages = {};
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -23,26 +25,44 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
   }
 
   Future<void> _loadAppsAndSelection() async {
-    // 1. Загружаем сохраненный список заблокированных пакетов
-    final prefs = await SharedPreferences.getInstance();
-    final savedList = prefs.getStringList('saved_blocked_packages') ?? [];
-    _selectedPackages = savedList.toSet();
+    try {
+      // 1. Загружаем сохраненный список заблокированных пакетов
+      final prefs = await SharedPreferences.getInstance();
+      final savedList = prefs.getStringList('saved_blocked_packages') ?? [];
+      _selectedPackages = savedList.toSet();
 
-    // Синхронизируем с нативным Kotlin-сервисом сразу при входе
-    if (_selectedPackages.isNotEmpty) {
-      await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
+      // Синхронизируем с нативным Kotlin-сервисом сразу при входе
+      if (_selectedPackages.isNotEmpty) {
+        await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
+      }
+
+      // 2. Запрашиваем установленные приложения с таймаутом на случай блокировки системой
+      final apps = await InstalledApps.getInstalledApps(
+        excludeSystemApps: true,
+        withIcon: true,
+      ).timeout(
+        const Duration(seconds: 7),
+        onTimeout: () => throw TimeoutException("Таймаут получения приложений"),
+      );
+
+      // Сортируем по названию для удобного поиска
+      apps.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      if (mounted) {
+        setState(() {
+          _installedApps = apps;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Ошибка загрузки приложений: $e");
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = "Не удалось загрузить список приложений. Проверьте разрешения.";
+        });
+      }
     }
-
-    // 2. Получаем список приложений (исключая системные, только с лаунчером)
-    final apps = await InstalledApps.getInstalledApps(
-      excludeSystemApps: true,
-      withIcon: true,
-    );
-
-    setState(() {
-      _installedApps = apps;
-      _isLoading = false;
-    });
   }
 
   Future<void> _toggleApp(String packageName) async {
@@ -57,7 +77,7 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('saved_blocked_packages', _selectedPackages.toList());
 
-    // Синхронизируем с нативным Kotlin-сервисом
+    // Передаем обновленный список пакетов в нативный BlockerAccessibilityService
     await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
   }
 
@@ -69,6 +89,33 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
+          : _errorMessage != null
+          ? Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+              const SizedBox(height: 12),
+              Text(_errorMessage!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _isLoading = true;
+                    _errorMessage = null;
+                  });
+                  _loadAppsAndSelection();
+                },
+                child: const Text('Повторить'),
+              )
+            ],
+          ),
+        ),
+      )
+          : _installedApps.isEmpty
+          ? const Center(child: Text('Установленные сторонние приложения не найдены'))
           : ListView.builder(
         itemCount: _installedApps.length,
         itemBuilder: (context, index) {
@@ -80,8 +127,13 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
             onChanged: (_) => _toggleApp(app.packageName),
             title: Text(app.name),
             subtitle: Text(app.packageName),
-            secondary: app.icon != null
-                ? Image.memory(app.icon!, width: 40, height: 40)
+            secondary: app.icon != null && app.icon!.isNotEmpty
+                ? Image.memory(
+              app.icon!,
+              width: 40,
+              height: 40,
+              errorBuilder: (_, __, ___) => const Icon(Icons.android),
+            )
                 : const Icon(Icons.android),
           );
         },

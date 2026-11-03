@@ -1,8 +1,10 @@
 package com.blockbuster
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -17,43 +19,65 @@ class MainActivity: FlutterActivity() {
             val prefs = getSharedPreferences("app_blocker_prefs", Context.MODE_PRIVATE)
 
             when (call.method) {
-                "setBlockedPackages" -> {
-                    val packages = call.argument<List<String>>("packages") ?: emptyList()
-                    prefs.edit().putStringSet("blocked_packages", packages.toSet()).apply()
-                    result.success(true)
+                // Проверка статуса службы (Dart ждет строго "isAccessibilityEnabled")
+                "isAccessibilityEnabled", "isAccessibilityServiceEnabled" -> {
+                    val isEnabled = isAccessibilityServiceEnabled()
+                    result.success(isEnabled)
                 }
 
-                "addTime" -> {
-                    val packageName = call.argument<String>("packageName") ?: ""
-                    val seconds = call.argument<Int>("seconds") ?: 0
-                    val now = System.currentTimeMillis()
-                    val currentDeadline = prefs.getLong("deadline_$packageName", 0L)
-
-                    // Если время еще не вышло — продлеваем дедлайн, иначе считаем от текущего момента
-                    val baseTime = if (currentDeadline > now) currentDeadline else now
-                    val newDeadline = baseTime + (seconds * 1000L)
-
-                    prefs.edit().putLong("deadline_$packageName", newDeadline).apply()
-                    result.success(true)
-                }
-
-                "getTimeLeft" -> {
-                    val packageName = call.argument<String>("packageName") ?: ""
-                    val now = System.currentTimeMillis()
-                    val deadline = prefs.getLong("deadline_$packageName", 0L)
-                    val remainingSeconds = if (deadline > now) ((deadline - now) / 1000).toInt() else 0
-                    result.success(remainingSeconds)
-                }
-
-                "isAccessibilityEnabled" -> {
-                    val enabled = isAccessibilityServiceEnabled(context, BlockerAccessibilityService::class.java)
-                    result.success(enabled)
-                }
-
+                // Переход в настройки спецвозможностей
                 "openAccessibilitySettings" -> {
-                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                    startActivity(intent)
-                    result.success(true)
+                    try {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("INTENT_ERROR", e.message, null)
+                    }
+                }
+
+                // Сохранение списка блокируемых приложений
+                "setBlockedPackages", "setBlockedApps" -> {
+                    val packages = call.argument<List<String>>("packages")
+                    if (packages != null) {
+                        prefs.edit().putStringSet("blocked_packages", packages.toSet()).apply()
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Packages list is null", null)
+                    }
+                }
+
+                // Получение списка блокируемых приложений
+                "getBlockedApps", "getBlockedPackages" -> {
+                    val packages = prefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
+                    result.success(packages.toList())
+                }
+
+                // Добавление времени в банк секунд
+                "addTime" -> {
+                    val packageName = call.argument<String>("packageName")
+                    val seconds = call.argument<Int>("seconds") ?: 0
+
+                    if (packageName != null) {
+                        val currentBank = prefs.getInt("bank_seconds_$packageName", 0)
+                        val newBank = currentBank + seconds
+                        prefs.edit().putInt("bank_seconds_$packageName", newBank).apply()
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Package name is null", null)
+                    }
+                }
+
+                // Чтение остатка банка секунд
+                "getTimeLeft" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName != null) {
+                        val remainingSeconds = prefs.getInt("bank_seconds_$packageName", 0)
+                        result.success(if (remainingSeconds > 0) remainingSeconds else 0)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Package name is null", null)
+                    }
                 }
 
                 else -> result.notImplemented()
@@ -61,12 +85,20 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    private fun isAccessibilityServiceEnabled(context: Context, service: Class<*>): Boolean {
-        val expectedComponentName = "${context.packageName}/${service.name}"
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedComponentName = "$packageName/${BlockerAccessibilityService::class.java.canonicalName}"
+        val expectedShortName = "$packageName/.BlockerAccessibilityService"
+
         val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
+            contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabledServices.contains(expectedComponentName)
+        ) ?: ""
+
+        val colonSplitter = enabledServices.split(":")
+        return colonSplitter.any {
+            it.equals(expectedComponentName, ignoreCase = true) ||
+                    it.equals(expectedShortName, ignoreCase = true) ||
+                    it.contains(packageName)
+        }
     }
 }
