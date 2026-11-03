@@ -50,44 +50,57 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> with WidgetsB
   Future<void> _loadBlockedApps() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      List<String> blockedPackages = prefs.getStringList('saved_blocked_packages') ??
-          prefs.getStringList('blocked_packages') ??
-          [];
+      final blockedPackageNames = prefs.getStringList('saved_blocked_packages') ?? [];
 
-      if (blockedPackages.isEmpty) {
-        if (mounted) setState(() => _isLoading = false);
+      if (blockedPackageNames.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _blockedAppsInfo = [];
+            _isLoading = false;
+          });
+        }
         return;
       }
 
+      // Получаем все приложения, включая системные
       final allApps = await InstalledApps.getInstalledApps(
         excludeSystemApps: false,
         withIcon: true,
       );
 
-      final filtered = allApps
-          .where((app) => blockedPackages.contains(app.packageName))
-          .toList();
+      final Map<String, AppInfo> appsMap = {
+        for (var app in allApps) app.packageName: app
+      };
 
-      Map<String, int> times = {};
-      for (var app in filtered) {
-        try {
-          times[app.packageName] = await NativeBlockerBridge.getTimeLeft(app.packageName)
-              .timeout(const Duration(seconds: 1), onTimeout: () => 0);
-        } catch (_) {
-          times[app.packageName] = 0;
+      final List<AppInfo> result = [];
+
+      for (final pkg in blockedPackageNames) {
+        if (appsMap.containsKey(pkg)) {
+          result.add(appsMap[pkg]!);
+        } else {
+          // Если пакет скрыт из общего лаунчера (например, Mi Video), запрашиваем его индивидуально
+          try {
+            final appInfo = await InstalledApps.getAppInfo(pkg);
+            if (appInfo != null) {
+              result.add(appInfo);
+            }
+          } catch (_) {
+            // Пакет удален или недоступен
+          }
         }
       }
 
       if (mounted) {
         setState(() {
-          _blockedAppsInfo = filtered;
-          _remainingSecondsMap = times;
+          _blockedAppsInfo = result;
+          _isLoading = false;
         });
       }
     } catch (e) {
-      debugPrint("Ошибка обновления данных: $e");
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      debugPrint("Ошибка загрузки заблокированных приложений: $e");
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 

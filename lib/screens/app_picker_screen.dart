@@ -43,7 +43,7 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
         await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
       }
 
-      // excludeSystemApps: false позволяет загрузить предустановленный софт (YouTube, Chrome и т.д.)
+      // 1. Получаем все приложения (включая системные)
       final apps = await InstalledApps.getInstalledApps(
         excludeSystemApps: false,
         withIcon: true,
@@ -52,13 +52,33 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
         onTimeout: () => throw TimeoutException("Таймаут получения приложений"),
       );
 
-      // Фильтруем: отсекаем критические настройки, сам Block Buster и рабочие столы (лаунчеры)
+      // 2. Отсекаем критические системные процессы
       final filtered = apps.where((app) {
         final pkg = app.packageName.toLowerCase();
         if (_criticalPackages.contains(pkg)) return false;
         if (pkg.contains('launcher') || pkg.contains('home')) return false;
         return true;
       }).toList();
+
+      // 3. Проверяем наличие скрытых пакетов Mi Video / YouShorts (только если они реально есть на телефоне)
+      const specialPackages = [
+        'com.miui.videoplayer',
+        'com.mi.globalvideoplayer',
+      ];
+
+      for (final pkg in specialPackages) {
+        final alreadyInList = filtered.any((a) => a.packageName == pkg);
+        if (!alreadyInList) {
+          try {
+            final appInfo = await InstalledApps.getAppInfo(pkg);
+            if (appInfo != null) {
+              filtered.add(appInfo);
+            }
+          } catch (_) {
+            // Пакет не установлен на данном устройстве — тихо пропускаем
+          }
+        }
+      }
 
       filtered.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
