@@ -18,6 +18,15 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
+  // Пакеты, которые категорически нельзя блокировать во избежание софт-лока устройства
+  static const Set<String> _criticalPackages = {
+    'com.blockbuster',
+    'com.android.settings',
+    'com.android.systemui',
+    'com.google.android.packageinstaller',
+    'com.android.packageinstaller',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -26,31 +35,36 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
 
   Future<void> _loadAppsAndSelection() async {
     try {
-      // 1. Загружаем сохраненный список заблокированных пакетов
       final prefs = await SharedPreferences.getInstance();
       final savedList = prefs.getStringList('saved_blocked_packages') ?? [];
       _selectedPackages = savedList.toSet();
 
-      // Синхронизируем с нативным Kotlin-сервисом сразу при входе
       if (_selectedPackages.isNotEmpty) {
         await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
       }
 
-      // 2. Запрашиваем установленные приложения с таймаутом на случай блокировки системой
+      // excludeSystemApps: false позволяет загрузить предустановленный софт (YouTube, Chrome и т.д.)
       final apps = await InstalledApps.getInstalledApps(
-        excludeSystemApps: true,
+        excludeSystemApps: false,
         withIcon: true,
       ).timeout(
-        const Duration(seconds: 7),
+        const Duration(seconds: 10),
         onTimeout: () => throw TimeoutException("Таймаут получения приложений"),
       );
 
-      // Сортируем по названию для удобного поиска
-      apps.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      // Фильтруем: отсекаем критические настройки, сам Block Buster и рабочие столы (лаунчеры)
+      final filtered = apps.where((app) {
+        final pkg = app.packageName.toLowerCase();
+        if (_criticalPackages.contains(pkg)) return false;
+        if (pkg.contains('launcher') || pkg.contains('home')) return false;
+        return true;
+      }).toList();
+
+      filtered.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
       if (mounted) {
         setState(() {
-          _installedApps = apps;
+          _installedApps = filtered;
           _isLoading = false;
         });
       }
@@ -76,8 +90,6 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('saved_blocked_packages', _selectedPackages.toList());
-
-    // Передаем обновленный список пакетов в нативный BlockerAccessibilityService
     await NativeBlockerBridge.setBlockedPackages(_selectedPackages.toList());
   }
 
@@ -115,7 +127,7 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
         ),
       )
           : _installedApps.isEmpty
-          ? const Center(child: Text('Установленные сторонние приложения не найдены'))
+          ? const Center(child: Text('Приложения не найдены'))
           : ListView.builder(
         itemCount: _installedApps.length,
         itemBuilder: (context, index) {

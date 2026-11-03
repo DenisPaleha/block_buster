@@ -60,7 +60,7 @@ class _ConvertWalletScreenState extends State<ConvertWalletScreen> with WidgetsB
       }
 
       final allApps = await InstalledApps.getInstalledApps(
-        excludeSystemApps: true,
+        excludeSystemApps: false,
         withIcon: true,
       );
 
